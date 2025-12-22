@@ -61,30 +61,26 @@ class Solvers:
         raise NotImplementedError()
     
 class ConjugateGradient(Solvers):
-    # "αk"
-    #_STATS = ("ite", "αk", "|rk|/|b|", "|Ar|/|Ab|", "|Apk|/|Ab|", "<b, Apk>", "<b, rk>", "A(αp)-(αA)p", "|b-Ax-r|")
-    _STATS = ("ite", "|rk|/|b|", "|Ark|/|Ab|", "|Apk|/|Ab|", "|b-Ax-r|", "pred")
+    _STATS = ("ite", "|rk|/|b|", "|Ark|/|Ab|", "|Apk|/|Ab|", "|b-Ax-r|", "|xk-x*|/|x*|")
 
     def __init__(self, A, b, maxit = None, tol = 1e-8, reO = False, x0 = None, prinT = True):
         super().__init__(A, b, maxit, tol, reO, x0, prinT)
         self.stat = {k : [] for k in self._STATS[1:]}
         
-    def iterate(self, xk, rk, pk, Ap, pAp, norm_r, R):
+        
+    def iterate(self, xk, xkp, rk, pk, Ap, pAp, norm_r):
         alpha = norm_r ** 2 / pAp
         xk = xk + alpha * pk
+        
+        gamma = (torch.norm(pk) ** 2) / ((norm_r ** 2) * pAp)
+        xkp = xkp + gamma * pk
+        
         rk = rk - alpha * Ap
-        
-        # re-orthogonalization
-        if not R is None:
-            rk = rk - R @ Avec(R.T, rk)
-            norm_rk = torch.norm(rk)
-            R = torch.concat([R, rk.reshape(-1, 1) / norm_rk], dim = 1)
-        else:
-            norm_rk = torch.norm(rk)
-        
+        norm_rk = torch.norm(rk)
         beta = (norm_rk / norm_r) ** 2   
         pk = rk + beta * pk
-        return xk, rk, pk, norm_rk, R
+        
+        return xk, xkp, rk, pk, norm_rk
     
     def solve(self, pred = lambda x : 0):
         rk = self.b - Avec(self.A, self.xk)
@@ -96,12 +92,8 @@ class ConjugateGradient(Solvers):
         norm_Ar0 = torch.norm(Ap)
         norm_Ap, norm_Ark = norm_Ar0, norm_Ar0
         
-        # re-orthogonalization
-        if self._reO:
-            R = rk.reshape(-1, 1) / norm_rk
-        else:
-            R = None
-        
+        xkp = torch.zeros_like(self.b)
+
         # Rx = rk.reshape(-1, 1) / torch.norm(rk)
         # AP = Ap.reshape(-1, 1) / torch.norm(Ap)
         # P = pk.reshape(-1, 1) / torch.norm(pk)
@@ -117,13 +109,12 @@ class ConjugateGradient(Solvers):
 
         while self.terminate(self.ite, relApnorm):
             
-            self.xk, rk, pk, norm_rk, R = self.iterate(self.xk, rk, pk, Ap, pAp, norm_rk, R)
+            self.xk, xkp, rk, pk, norm_rk = self.iterate(self.xk, xkp, rk, pk, Ap, pAp, norm_rk)
             
             # update 
             Ap = Avec(self.A, pk)
             pAp = torch.dot(pk, Ap)
             self.ite += 1
-            
             
             # Rx = torch.concat([Rx, rk.reshape(-1, 1) / torch.norm(rk)], dim = -1)
             # AP = torch.concat([AP, Ap.reshape(-1, 1) / torch.norm(Ap)], dim = -1)
@@ -149,13 +140,14 @@ class ConjugateGradient(Solvers):
             #                       torch.norm((self.b - Avec(self.A, self.xk)) - rk))
         
         self.stat["xk"] = self.xk.tolist()
-        self.xk = self.xk - torch.dot(self.xk, rk) * rk / (norm_rk ** 2)
-        self.stat["xk_lifted"] = self.xk.tolist()
+        xkp = self.xk - ((norm_rk ** 4) / (torch.norm(pk) ** 2)) * xkp
+        self.xk = xkp - torch.dot(xkp, pk) * pk / (torch.norm(pk) ** 2)
+        self.stat["xk_lifted"] = xkp.tolist()
             
 class ConjugateResidual(Solvers):
     
     #_STATS = ("ite", "|rk|/|b|", "|Ark|/|Ab|", "<b, Ark>", "<Ab, Ap>", "A(αp)-(αA)p", "|b-Ax-r|")
-    _STATS = ("ite", "|rk|/|b|", "|Ark|/|Ab|", "|b-Ax-r|", "pred")
+    _STATS = ("ite", "|rk|/|b|", "|Ark|/|Ab|", "|b-Ax-r|", "|xk-x*|/|x*|")
 
     def __init__(self, A, b, maxit = None, tol = 1e-8, reO = False, x0 = None, prinT = True):
         super().__init__(A, b, maxit, tol, reO, x0, prinT)
@@ -247,13 +239,13 @@ class ConjugateResidual(Solvers):
             #                       torch.norm((self.b - Avec(self.A, self.xk)) - rk))
                                  
         self.stat["xk"] = self.xk.tolist()
-        self.xk = self.xk - torch.dot(self.xk, rk) * rk / (norm_r ** 2)
+        self.xk = self.xk - torch.dot(self.xk, pk) * pk / (torch.norm(pk) ** 2)
         self.stat["xk_lifted"] = self.xk.tolist()
 
 class MinimalResidual(Solvers):
     
     #_STATS = ("ite", "|rk|/|b|", "|Ark|/|Ab|", "<b, Ar>", "<Ad0, Adk>", "<v1, vk>", "A(αp)-(αA)p", "|b-Ax-r|")
-    _STATS = ("ite", "|rk|/|b|", "|Ark|/|Ab|", "|b-Ax-r|", "pred")
+    _STATS = ("ite", "|rk|/|b|", "|Ark|/|Ab|", "|b-Ax-r|", "|xk-x*|/|x*|")
 
     def __init__(self, A, b, maxit = None, tol = 1e-8, reO = False, x0 = None, prinT = True):
         super().__init__(A, b, maxit, tol, reO, x0, prinT)
@@ -377,7 +369,123 @@ class MinimalResidual(Solvers):
         self.stat["xk"] = self.xk.tolist()
         self.xk = self.xk - torch.dot(self.xk, rkm1) * rkm1 / (torch.norm(rkm1) ** 2)
         self.stat["xk_lifted"] = self.xk.tolist()
+        
+class CGLS(Solvers):
+    
+    _STATS = ("ite", "|rk|/|b|", "|Ark|/|Ab|", "|xk-x*|/|x*|")
+    
+    def __init__(self, A, b, maxit = None, tol = 1e-8, reO = False, x0 = None, prinT = True):
+        super().__init__(A, b, maxit, tol, reO, x0, prinT)
+        self.stat = {k : [] for k in self._STATS[1:]}
+    
+    def solve(self, pred = lambda x : 0):
+        rk = self.b
+        sk = Avec(self.A.T, self.b)
+        pk = sk
+        gammak = torch.norm(sk) ** 2
+        self.xk = torch.zeros_like(self.b)
+        
+        norm_r0 = torch.norm(self.b)
+        norm_rk = norm_r0
+        norm_Ar0 = torch.norm(sk)
+        norm_Ark = norm_Ar0
+        
+        self.storePrintStats(self.ite, 
+                             relnorm := norm_rk / norm_r0, 
+                             relAnorm := norm_Ark / norm_Ar0, 
+                             pred(self.xk))    
+
+        while self.terminate(self.ite, relnorm):
             
+            qk = Avec(self.A, pk)
+            alphak = gammak / (torch.norm(qk) ** 2)
+            self.xk = self.xk + alphak * pk
+            rk = rk - alphak * qk
+            sk = Avec(self.A.T, rk)
+            gammakp1 = torch.norm(sk) ** 2
+            beta = gammakp1 / gammak
+            pk = sk + beta * pk
+            
+            # update 
+            gammak = gammakp1
+            norm_rk = torch.norm(rk)
+            norm_Ark = gammak
+            self.ite += 1
+
+            self.storePrintStats(self.ite,
+                                  relnorm := norm_rk / norm_r0, 
+                                  relAnorm := norm_Ark / norm_Ar0, 
+                                  pred(self.xk))
+        
+        self.stat["xk"] = self.xk.tolist()
+        
+class LSQR(Solvers):
+    
+    _STATS = ("ite", "|rk|/|b|", "|Ark|/|Ab|", "|xk-x*|/|x*|")
+    
+    def __init__(self, A, b, maxit = None, tol = 1e-8, reO = False, x0 = None, prinT = True):
+        super().__init__(A, b, maxit, tol, reO, x0, prinT)
+        self.stat = {k : [] for k in self._STATS[1:]}
+    
+    def solve(self, pred = lambda x : 0):
+        uk = self.b
+        betak = torch.norm(uk)
+        uk = uk / betak
+        
+        vk = Avec(self.A.T, uk)
+        alphak = torch.norm(vk)
+        vk = vk / alphak
+        
+        barphik, barrhok = betak, alphak
+        
+        wk = vk
+        self.xk = torch.zeros_like(self.b)
+        
+        norm_r0 = betak
+        norm_rk = norm_r0
+        norm_Ar0 = alphak
+        norm_Ark = norm_Ar0
+        
+        self.storePrintStats(self.ite, 
+                             relnorm := norm_rk / norm_r0, 
+                             relAnorm := norm_Ark / norm_Ar0, 
+                             pred(self.xk))    
+
+        while self.terminate(self.ite, relnorm):
+            
+            uk = Avec(self.A, vk) - alphak * uk
+            betak = torch.norm(uk)
+            uk = uk / betak
+            
+            vk = Avec(self.A.T, uk) - betak * vk
+            alphak = torch.norm(vk)
+            vk = vk / alphak
+            
+            rhok = torch.sqrt(barrhok ** 2 + betak ** 2)
+            ck = barrhok / rhok
+            sk = betak / rhok
+            thetakp1 = sk * alphak
+            barrhok = - ck * alphak
+            phik = ck * barphik
+            barphik = sk * barphik
+            
+            self.xk = self.xk + (phik / rhok) * wk
+            wk = vk - (thetakp1 / rhok) * wk
+            
+            # update 
+            rk = self.b - Avec(self.A, self.xk)
+            norm_rk = torch.norm(rk)
+            norm_Ark = torch.norm(Avec(self.A, rk))
+            self.ite += 1
+
+            self.storePrintStats(self.ite,
+                                  relnorm := norm_rk / norm_r0, 
+                                  relAnorm := norm_Ark / norm_Ar0, 
+                                  pred(self.xk))
+        
+        self.stat["xk"] = self.xk.tolist()
+        
+    
 def Avec(A, x):
     if callable(A):
         return A(x)
