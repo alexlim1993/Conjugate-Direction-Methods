@@ -116,33 +116,19 @@ class ConjugateGradient(Solvers):
             pAp = torch.dot(pk, Ap)
             self.ite += 1
             
-            # Rx = torch.concat([Rx, rk.reshape(-1, 1) / torch.norm(rk)], dim = -1)
-            # AP = torch.concat([AP, Ap.reshape(-1, 1) / torch.norm(Ap)], dim = -1)
-            # P = torch.concat([P, pk.reshape(-1, 1) / torch.norm(pk)], dim = -1)
-            # PAP.append(float(pAp / (torch.norm(Ap) * torch.norm(pk))))
-            
             norm_Ark = torch.norm(Avec(self.A, rk))
             self.storePrintStats(self.ite,
                                   relnorm := norm_rk / norm_r0, 
                                   relAnorm := norm_Ark / norm_Ar0, 
                                   relApnorm := torch.norm(Ap) / norm_Ar0,
-                                  # abs(torch.dot(r0, Ap)) / (norm_r0 * torch.norm(Ap)), 
-                                  # abs(torch.dot(r0, rk)) / (norm_r0 * norm_rk), 
                                   torch.norm((self.b - Avec(self.A, self.xk)) - rk),
                                   pred(self.xk))
-            
-            # self.storePrintStats(self.ite,
-            #                       relnorm := norm_rk / norm_r0, 
-            #                       relAnorm := norm_Ark / norm_Ar0, 
-            #                       torch.norm(Ap) / norm_Ar0, 
-            #                       torch.norm(torch.diag(torch.tensor(PAP)) - P.T @ AP, p = 2),
-            #                       torch.norm(torch.eye(self.ite + 1) - Rx.T @ Rx, p = 2),
-            #                       torch.norm((self.b - Avec(self.A, self.xk)) - rk))
         
         self.stat["xk"] = self.xk.tolist()
-        xkp = self.xk - ((norm_rk ** 4) / (torch.norm(pk) ** 2)) * xkp
-        self.xk = xkp - torch.dot(xkp, pk) * pk / (torch.norm(pk) ** 2)
-        self.stat["xk_lifted"] = xkp.tolist()
+        if norm_rk / norm_r0 > 1e-9:
+            xkp = self.xk - ((norm_rk ** 4) / (torch.norm(pk) ** 2)) * xkp
+            self.xk = xkp - torch.dot(xkp, pk) * pk / (torch.norm(pk) ** 2)
+        self.stat["xk_lifted"] = self.xk.tolist()
             
 class ConjugateResidual(Solvers):
     
@@ -216,12 +202,12 @@ class ConjugateResidual(Solvers):
             
             # update 
             pAAp = torch.dot(Ap, Ap)
-            norm_r = torch.norm(rk)
+            norm_rk = torch.norm(rk)
             norm_Ar = torch.norm(Ar)
             self.ite += 1
             
             self.storePrintStats(self.ite,
-                                  relnorm := norm_r / norm_r0, 
+                                  relnorm := norm_rk / norm_r0, 
                                   relAnorm := norm_Ar / norm_Ar0,
                                   # abs(torch.dot(r0, Ar)) / (norm_r0 * norm_Ar), 
                                   # abs(torch.dot(Ar0, Ap)) / (norm_Ar0 * torch.norm(Ap)), 
@@ -239,7 +225,8 @@ class ConjugateResidual(Solvers):
             #                       torch.norm((self.b - Avec(self.A, self.xk)) - rk))
                                  
         self.stat["xk"] = self.xk.tolist()
-        self.xk = self.xk - torch.dot(self.xk, pk) * pk / (torch.norm(pk) ** 2)
+        if norm_rk / norm_r0 > 1e-8:
+            self.xk = self.xk - torch.dot(self.xk, pk) * pk / (torch.norm(pk) ** 2)
         self.stat["xk_lifted"] = self.xk.tolist()
 
 class MinimalResidual(Solvers):
@@ -409,7 +396,7 @@ class CGLS(Solvers):
             # update 
             gammak = gammakp1
             norm_rk = torch.norm(rk)
-            norm_Ark = gammak
+            norm_Ark = torch.norm(Avec(self.A, rk))
             self.ite += 1
 
             self.storePrintStats(self.ite,
@@ -443,7 +430,7 @@ class LSQR(Solvers):
         
         norm_r0 = betak
         norm_rk = norm_r0
-        norm_Ar0 = alphak
+        norm_Ar0 = torch.norm(Avec(self.A, self.b))
         norm_Ark = norm_Ar0
         
         self.storePrintStats(self.ite, 
